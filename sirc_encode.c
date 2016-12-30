@@ -1,19 +1,30 @@
+/*
+ * author: Mehmet ASLAN
+ * date: December 16, 2016
+ *
+ * no warranty, no licence agreement
+ * use it at your own risk
+ */
+
 #include "sirc_encode.h"
+#include "bits.h"
 #include "stm32f0xx.h"
 
+/* stm32f0 irtim used */
 #define TIM_CAR TIM17
 #define TIM_ENV TIM16
 
-uint16_t sirc_frame;
-uint8_t sirci;
-uint8_t sirc_encode_lock = 0;
+/* private variables */
+static uint8_t reg = 0;
+static uint16_t frame;
+static uint8_t encode_lock;
+static uint8_t frame_end_flag;
+static uint8_t biti; 		/* bit iterator, when 12 done */
 
-/* this function error prone some reset values assumed
- * when setting peripheral registers
- */
 void sirc_encode_init(void)
 {
-        /* clocks */
+	/* apb2 freq = 48 Mhz */
+	/* clocks */
         RCC->AHBENR |= RCC_AHBENR_GPIOBEN;
         RCC->APB2ENR |= RCC_APB2ENR_TIM16EN | RCC_APB2ENR_TIM17EN;
 
@@ -31,9 +42,10 @@ void sirc_encode_init(void)
         TIM_CAR->CCMR1 |= TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1PE;
         TIM_CAR->CCR1 = (1333 / 4);
 
-        /* timer env pwm1 opm ue_int 1 Mhz */
+        /* timer env pwm1 one pulse mode ue_int 1 Mhz */
         TIM_ENV->PSC = 47;
         TIM_ENV->ARR = 1;
+        /* only timer overflow creates update interrupt*/
         TIM_ENV->CR1 |= TIM_CR1_ARPE | TIM_CR1_OPM | TIM_CR1_URS;
         TIM_ENV->DIER |= TIM_DIER_UIE;
 
@@ -53,20 +65,19 @@ void sirc_encode_init(void)
         TIM_ENV->BDTR |= TIM_BDTR_MOE;
 }
 
-
-void sirc_encode(uint8_t cmd, uint8_t addr)
+int8_t sirc_encode(uint8_t cmd, uint8_t addr)
 {
-        if (sirc_encode_lock)
-                return;
+	/* another frame is being send */
+	if (encode_lock)
+		return -1;
 
-        /* encode logic */
-        sirc_frame = 0;
-        sirci = 0;
+	frame = 0;
+	biti = 0;
 
-        sirc_frame |= (cmd & 0x7f);
-        sirc_frame |= ((addr & 0x1f) << 7);
+	frame |= (cmd & 0x7f);
+	frame |= ((addr & 0x1f) << 7);
 
-        /* start timer */
+	/* start timer */
         GPIOB->MODER &= ~GPIO_MODER_MODER9;
         GPIOB->MODER |= GPIO_MODER_MODER9_1;
 
@@ -77,39 +88,53 @@ void sirc_encode(uint8_t cmd, uint8_t addr)
         TIM_ENV->CR1 |= TIM_CR1_CEN;
         TIM_CAR->CR1 |= TIM_CR1_CEN;
 
-        sirc_encode_lock = 1;
+	encode_lock = 1;
+
+	return 0;
+}
+
+static void set_timer(uint16_t v)
+{
+	TIM_ENV->ARR = v;
+	/* update */
+	TIM_ENV->EGR |= TIM_EGR_UG;
+
+	TIM_ENV->CR1 |= TIM_CR1_CEN;
 }
 
 void TIM16_IRQHandler(void)
 {
-        /* one pulse update handling */
-        TIM_ENV->SR &= ~TIM_SR_UIF;
+	/* dont have to check because I didnt set any other interrupt */
+	TIM_ENV->SR &= ~TIM_SR_UIF;
 
-        if (sirci != 12) {
-                /* write new values to timers */
-                if (sirc_frame & 1)
-                        TIM_ENV->CCR1 = 1200;
-                else
-                        TIM_ENV->CCR1 = 600;
+        if (frame_end_flag) {
+                frame_end_flag = 0;
+                encode_lock = 0;
+                return;
+        }
+	
+	if (biti != 12) {
+		/* write next bit to timer */
+		if (frame & BIT16_0)
+			TIM_ENV->CCR1 = 1200;
+		else
+			TIM_ENV->CCR1 = 600;
 
-                TIM_ENV->ARR = TIM_ENV->CCR1 + 600;
-                /* update */
-                TIM_ENV->EGR |= TIM_EGR_UG;
+		set_timer(TIM_ENV->CCR1 + 600);
 
-                TIM_ENV->CR1 |= TIM_CR1_CEN;
-
-                sirc_frame >>= 1;
-                ++sirci;
-        } else {
-                /* packet end */
-                GPIOB->MODER &= ~GPIO_MODER_MODER9;
+                frame >>= 1;
+                ++biti;
+	} else {
+		/* one frame send put ir led idle */
+		GPIOB->MODER &= ~GPIO_MODER_MODER9;
                 GPIOB->MODER |= GPIO_MODER_MODER9_0;
                 GPIOB->ODR |= GPIO_ODR_9;
 
-                TIM_CAR->CR1 &= ~TIM_CR1_CEN;
+		TIM_CAR->CR1 &= ~TIM_CR1_CEN;
 
-                sirc_encode_lock = 0;
-        }
+		/* wait a little so receiver handles */
+	        set_timer(FRAME_END_DELAY);
 
-
+		frame_end_flag = 1;
+	}
 }

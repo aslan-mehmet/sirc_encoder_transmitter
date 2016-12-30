@@ -1,16 +1,17 @@
 author: Mehmet ASLAN
 date: december 27, 2016
 
-SIMPLE SIRC ENCODER/TRANSMITTER
+Simple Sirc Encoder/Transmitter
 
 description
-        simple sony infrared protocol encoder and very small code size.
+        minimal code size and intterrupt driven.
 
 how it works
         it uses irtim that avaliable on stm32f0 devices. irtim works with two
 timers; tim17(carrier) and tim16(envelope). please be aware sirc_encode_init
 function contains some assumed reset values. encoding done with envelope timer's
-interrupt. when encoding done I close the timers and pull high ir pin.
+interrupt. when encoding done I close the timers, pull high ir pin, wait so
+received handles send frame.
 
 hardware
         at the end of irtim timer there is nand gate. I use not gate(single
