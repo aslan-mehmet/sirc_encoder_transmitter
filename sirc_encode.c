@@ -7,7 +7,6 @@
  */
 
 #include "sirc_encode.h"
-#include "bits.h"
 #include "stm32f0xx.h"
 
 /* stm32f0 irtim used */
